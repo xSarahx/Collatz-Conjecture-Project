@@ -11,7 +11,7 @@ import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.BrokenBarrierException;
@@ -45,17 +46,6 @@ public final class ProcessingHub {
     private static final List<Future<CollatzSequencer.FinalSequencerReport<? extends Number>>> dataSet
             = new ArrayList<>(Math.toIntExact(ProcessingHubNumericalHelper.DEFAULT_INCREMENT_VALUE.intValueExact()));
 
-    private static BigInteger getNextFinalNumber(BigInteger finishNumber) {
-        return finishNumber.mod(BigInteger.valueOf(AVAILABLE_PROCESSORS)).equals(BigInteger.ZERO) ? finishNumber
-                : new BigDecimal(finishNumber).divide(BigDecimal.valueOf(AVAILABLE_PROCESSORS)).setScale(0, RoundingMode.CEILING)
-                .multiply(BigDecimal.valueOf(AVAILABLE_PROCESSORS)).toBigIntegerExact();
-    }
-
-    private static BigInteger getNextStartingNumber(BigInteger startNumber) {
-        return startNumber.mod(BigInteger.valueOf(AVAILABLE_PROCESSORS)).equals(BigInteger.ZERO) ? startNumber
-                : new BigDecimal(startNumber).divide(BigDecimal.valueOf(AVAILABLE_PROCESSORS)).setScale(0, RoundingMode.FLOOR)
-                .multiply(BigDecimal.valueOf(AVAILABLE_PROCESSORS)).toBigIntegerExact();
-    }
     private final CyclicBarrier barrier;
     private final ExecutorService service;
     private final ProcessingHubStorageManager storageManager;
@@ -328,9 +318,13 @@ public final class ProcessingHub {
 
                 @Override
                 public BigInteger next() {
-                    BigInteger i = getCurrentNumber();
-                    increment();
-                    return i;
+                    if (hasNext()) {
+                        BigInteger i = getCurrentNumber();
+                        increment();
+                        return i;
+                    } else {
+                        throw new NoSuchElementException("No more elements in iterator.");
+                    }
                 }
             };
         }
@@ -376,7 +370,7 @@ public final class ProcessingHub {
                         for (CollatzSequencer.FinalSequencerReport<? extends Number> report : values) {
                             String formattedString = "Initial Value: " + report.getInitialValue() + ""
                                     + " Iterations: " + report.getIterations() + " Result: " + report.getResult() + "\n";
-                            buffer.put(formattedString.getBytes());
+                            buffer.put(formattedString.getBytes(Charset.forName("UTF-16")));
                             buffer.flip();
                             channel.write(buffer);
                             buffer.clear();
