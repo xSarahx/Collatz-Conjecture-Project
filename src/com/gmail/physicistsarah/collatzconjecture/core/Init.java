@@ -19,7 +19,6 @@ import org.controlsfx.dialog.DialogStyle;
 import org.controlsfx.dialog.Dialogs;
 
 /**
- * Args: -Xmx8g -Xss100m
  *
  * @author Sarah Szabo <PhysicistSarah@Gmail.com>
  */
