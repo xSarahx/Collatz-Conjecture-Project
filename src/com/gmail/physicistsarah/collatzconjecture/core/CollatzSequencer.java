@@ -6,8 +6,10 @@
 package com.gmail.physicistsarah.collatzconjecture.core;
 
 import java.math.BigInteger;
+import static java.lang.Math.*;
 import java.util.Comparator;
 import java.util.Objects;
+import java.util.logging.Logger;
 import net.jcip.annotations.Immutable;
 import net.jcip.annotations.NotThreadSafe;
 
@@ -19,6 +21,8 @@ import net.jcip.annotations.NotThreadSafe;
  */
 @NotThreadSafe
 public class CollatzSequencer {
+
+    private static final Logger LOG = Logger.getLogger(CollatzSequencer.class.getName());
 
     private final boolean ultraLightweight;
     private final BigInteger initialValue;
@@ -119,10 +123,10 @@ public class CollatzSequencer {
                     ? report.getSequence().substring(0, report.getSequence().length() - 3) : "The sequence starts and ends at 1 <Nothing Done>");
         } else if ((report.getResult() & 1) == 0) {
             long value = report.getResult() / 2;
-            return performCalculationLightweight(new SequencerReport<>(value, Math.addExact(report.getIterations(), 1),
+            return performCalculationLightweight(new SequencerReport<>(value, addExact(report.getIterations(), 1),
                     this.ultraLightweight ? "" : report.getSequence() + " " + report.getResult() + "/2 -> " + value + " ->"));
         } else {
-            long value = Math.addExact(Math.multiplyExact(report.getResult(), 3), 1);
+            long value = addExact(multiplyExact(report.getResult(), 3), 1);
             return performCalculationLightweight(new SequencerReport<>(value, report.getIterations() + 1, this.ultraLightweight
                     ? "" : report.getSequence() + report.getResult() + " * 3 + 1 ->" + value + " ->"));
         }
@@ -188,10 +192,7 @@ public class CollatzSequencer {
                 return false;
             }
             final FinalSequencerReport<?> other = (FinalSequencerReport<?>) obj;
-            if (!Objects.equals(this.initialValue, other.initialValue)) {
-                return false;
-            }
-            return true;
+            return Objects.equals(this.initialValue, other.getInitialValue());
         }
 
         @Override
@@ -203,7 +204,7 @@ public class CollatzSequencer {
     }
 
     @Immutable
-    public static class SequencerReport<T extends Number> {
+    static class SequencerReport<T extends Number> {
 
         private final T result, iterations;
         private final String sequence;
