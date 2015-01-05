@@ -5,8 +5,11 @@
  */
 package com.gmail.physicistsarah.collatzconjecture.core;
 
+import static java.lang.Math.addExact;
+import static java.lang.Math.multiplyExact;
 import java.math.BigInteger;
-import static java.lang.Math.*;
+import static java.math.BigInteger.ONE;
+import static java.math.BigInteger.ZERO;
 import java.util.Comparator;
 import java.util.Objects;
 import java.util.logging.Logger;
@@ -37,7 +40,7 @@ public class CollatzSequencer {
             throw new NumberFormatException("The value passed to the constructor must be a natural number.");
         }
         this.iterationsLong = 0;
-        this.iterationsBig = BigInteger.ZERO;
+        this.iterationsBig = ZERO;
         this.initialValue = currentValue;
         this.sequence = "";
         this.ultraLightweight = ultraLightweight;
@@ -62,30 +65,30 @@ public class CollatzSequencer {
     }
 
     private BigInteger performCalculationHeavyweight(BigInteger number) {
-        if (number.equals(BigInteger.ONE)) {
+        if (number.equals(ONE)) {
             return number;
-        } else if (number.and(BigInteger.ONE).equals(BigInteger.ZERO)) {
-            this.iterationsBig = this.iterationsBig.add(BigInteger.ONE);
+        } else if (number.and(ONE).equals(ZERO)) {
+            this.iterationsBig = this.iterationsBig.add(ONE);
             return performCalculationHeavyweight(number.divide(new BigInteger("2")));
         } else {
-            this.iterationsBig = this.iterationsBig.add(BigInteger.ONE);
-            return performCalculationHeavyweight(number.multiply(new BigInteger("3")).add(BigInteger.ONE));
+            this.iterationsBig = this.iterationsBig.add(ONE);
+            return performCalculationHeavyweight(number.multiply(new BigInteger("3")).add(ONE));
         }
     }
 
     private BigInteger performCalculationHeavyweightWithSequence(BigInteger number) {
-        if (number.equals(BigInteger.ONE)) {
+        if (number.equals(ONE)) {
             this.sequence += this.ultraLightweight ? "" : "= 1";
             return number;
-        } else if (number.and(BigInteger.ONE).equals(BigInteger.ZERO)) {
+        } else if (number.and(ONE).equals(ZERO)) {
             this.sequence += this.ultraLightweight ? "" : number + " / 2 = " + number.divide(BigInteger.valueOf(2)) + " -> ";
-            this.iterationsBig = this.iterationsBig.add(BigInteger.ONE);
+            this.iterationsBig = this.iterationsBig.add(ONE);
             return performCalculationHeavyweightWithSequence(number.divide(new BigInteger("2")));
         } else {
             this.sequence += this.ultraLightweight ? "" : number + " * 3 + 1 = "
-                    + number.multiply(new BigInteger("3")).add(BigInteger.ONE) + " -> ";
-            this.iterationsBig = this.iterationsBig.add(BigInteger.ONE);
-            return performCalculationHeavyweightWithSequence(number.multiply(new BigInteger("3")).add(BigInteger.ONE));
+                    + number.multiply(new BigInteger("3")).add(ONE) + " -> ";
+            this.iterationsBig = this.iterationsBig.add(ONE);
+            return performCalculationHeavyweightWithSequence(number.multiply(new BigInteger("3")).add(ONE));
         }
     }
 
