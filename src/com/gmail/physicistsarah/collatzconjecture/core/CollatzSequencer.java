@@ -58,12 +58,6 @@ public class CollatzSequencer {
         }
     }
 
-    private <T extends Number> FinalSequencerReport<? super Number> convertToFinalForm(SequencerReport<T> report) {
-        return new FinalSequencerReport<>(new SequencerReport<>(new BigInteger(report.getResult().toString()),
-                new BigInteger(report.getIterations().toString()), this.ultraLightweight ? ""
-                        : report.getSequence() + "<br>Lightweight"), this.initialValue);
-    }
-
     private BigInteger performCalculationHeavyweight(BigInteger number) {
         if (number.equals(ONE)) {
             return number;
@@ -153,7 +147,7 @@ public class CollatzSequencer {
     }
 
     @Immutable
-    public static final class FinalSequencerReport<T extends Number> extends SequencerReport<T> implements Comparable<FinalSequencerReport<T>> {
+    static final class FinalSequencerReport<T extends Number> extends SequencerReport<T> implements Comparable<FinalSequencerReport<T>> {
 
         public static Comparator<? super FinalSequencerReport<? extends Number>> compareByInitialValue() {
             return (FinalSequencerReport<? extends Number> o1, FinalSequencerReport<? extends Number> o2)

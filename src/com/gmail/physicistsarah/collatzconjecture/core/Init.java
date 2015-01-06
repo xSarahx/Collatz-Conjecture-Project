@@ -8,10 +8,9 @@ package com.gmail.physicistsarah.collatzconjecture.core;
 import java.awt.Dimension;
 import java.io.IOException;
 import java.math.BigInteger;
-import javax.swing.JOptionPane;
-import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.stage.Stage;
+import javax.swing.JOptionPane;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import net.jcip.annotations.NotThreadSafe;
@@ -36,8 +35,8 @@ public class Init {
     }
 
     private static void initProcessingHub() {
-        //ProcessingHub hub = new ProcessingHub(new BigInteger("1"), new BigInteger("4000000"));
-        ProcessingHub hub = new ProcessingHub(ProcessingHub.HubNumericalState.WRITE_UNTIL_DISK_FULL);
+        ProcessingHub hub = new ProcessingHub(new BigInteger("1"), new BigInteger("4000000"));
+        //ProcessingHub hub = new ProcessingHub(ProcessingHub.HubNumericalState.WRITE_UNTIL_DISK_FULL);
         hub.init();
         //initNumberChooser();
     }
