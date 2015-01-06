@@ -6,6 +6,7 @@
 package com.gmail.physicistsarah.collatzconjecture.core;
 
 import java.io.IOException;
+import static java.lang.Math.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
@@ -31,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -44,7 +46,8 @@ public final class ProcessingHub {
 
     private static final int AVAILABLE_PROCESSORS = Runtime.getRuntime().availableProcessors();
     private static final List<Future<CollatzSequencer.FinalSequencerReport<? extends Number>>> dataSet
-            = new ArrayList<>(Math.toIntExact(ProcessingHubNumericalHelper.DEFAULT_INCREMENT_VALUE.intValueExact()));
+            = new ArrayList<>(toIntExact(ProcessingHubNumericalHelper.DEFAULT_INCREMENT_VALUE.intValueExact()));
+    private static final Logger LOG = Logger.getLogger(ProcessingHub.class.getName());
 
     private final CyclicBarrier barrier;
     private final ExecutorService service;
@@ -64,22 +67,21 @@ public final class ProcessingHub {
     }
 
     public ProcessingHub() {
-        this.storageManager = new ProcessingHubStorageManager((t) -> {
+        this.storageManager = new ProcessingHubStorageManager((voidObject) -> {
             shutdownHub();
-            return null;
         });
         this.controlCenter = new ProcessingHubControlCenter();
         this.barrier = new CyclicBarrier(1, () -> {
             synchronized (dataSet) {
                 List<CollatzSequencer.FinalSequencerReport<? extends Number>> list
                         = new ArrayList<>(dataSet.size());
-                for (Future<CollatzSequencer.FinalSequencerReport<? extends Number>> value : dataSet) {
+                dataSet.stream().forEach((value) -> {
                     try {
                         list.add(value.get());
                     } catch (InterruptedException | ExecutionException ex) {
                         Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
                     }
-                }
+                });
                 dataSet.clear();
                 Collections.sort(list, CollatzSequencer.FinalSequencerReport.compareByInitialValue());
                 System.out.println("Final Iteration: \n" + list.get(list.size() - 1));
@@ -343,10 +345,10 @@ public final class ProcessingHub {
         private final BlockingQueue<Collection<CollatzSequencer.FinalSequencerReport<? extends Number>>> queue;
 
         private final ExecutorService executor;
-        private final Function<Void, Void> errorShutdown;
+        private final Consumer<Void> errorShutdown;
         private volatile boolean shutdown;
 
-        public ProcessingHubStorageManager(Function<Void, Void> errorShutdown) {
+        public ProcessingHubStorageManager(Consumer<Void> errorShutdown) {
             try {
                 Files.createDirectories(CONJECTURE_FOLDER_PATH);
             } catch (IOException ex) {
@@ -379,7 +381,7 @@ public final class ProcessingHub {
                     }
                 } catch (IOException ex) {
                     Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
-                    this.errorShutdown.apply(null);
+                    this.errorShutdown.accept(null);
                 }
             });
         }
