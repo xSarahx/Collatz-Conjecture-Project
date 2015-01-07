@@ -147,7 +147,7 @@ public class CollatzSequencer {
     }
 
     @Immutable
-    static final class FinalSequencerReport<T extends Number> extends SequencerReport<T> implements Comparable<FinalSequencerReport<T>> {
+    public static final class FinalSequencerReport<T extends Number> extends SequencerReport<T> implements Comparable<FinalSequencerReport<T>> {
 
         public static Comparator<? super FinalSequencerReport<? extends Number>> compareByInitialValue() {
             return (FinalSequencerReport<? extends Number> o1, FinalSequencerReport<? extends Number> o2)
@@ -201,7 +201,7 @@ public class CollatzSequencer {
     }
 
     @Immutable
-    static class SequencerReport<T extends Number> {
+    public static class SequencerReport<T extends Number> {
 
         private final T result, iterations;
         private final String sequence;
