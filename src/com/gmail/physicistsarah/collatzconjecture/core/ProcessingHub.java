@@ -18,6 +18,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -38,7 +40,7 @@ public final class ProcessingHub {
     private static final int AVAILABLE_PROCESSORS = Runtime.getRuntime().availableProcessors();
     private static final Logger LOG = Logger.getLogger(ProcessingHub.class.getName());
 
-    private final ExecutorService service = Executors.newFixedThreadPool(AVAILABLE_PROCESSORS + 1, new ThreadFactory() {
+    private final ExecutorService service = Executors.newFixedThreadPool(AVAILABLE_PROCESSORS, new ThreadFactory() {
         private BigInteger count = BigInteger.ZERO;
 
         @Override
@@ -88,11 +90,15 @@ public final class ProcessingHub {
             throw new IllegalArgumentException("The starting number is less than zero");
         }
         for (BigInteger i = startNumber; i.compareTo(finishNumber) < 0; i = i.add(BigInteger.ONE)) {
-            BigInteger copy = i;
+            final BigInteger copy = i;
             this.service.submit(() -> {
-                CollatzSequencer.FinalSequencerReport<? extends Number> result = new CollatzSequencer(copy, true).init();
-                this.storageManager.saveValue(result);
-                return result;
+                try {
+                    this.storageManager.saveValue(new CollatzSequencer(copy, true).init());
+                } catch (IOException ex) {
+                    Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
+                } catch (InterruptedException ex) {
+                    Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
+                }
             });
         }
     }
@@ -104,13 +110,13 @@ public final class ProcessingHub {
      * @throws IOException
      */
     public void shutdownHub() throws IOException {
-        this.service.shutdown();
         try {
+            this.service.shutdown();
             this.service.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+            this.storageManager.shutdown();
         } catch (InterruptedException ex) {
             Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
         }
-        this.storageManager.shutdown();
     }
 
     /**
@@ -331,10 +337,11 @@ public final class ProcessingHub {
 
         public static final Path CONJECTURE_FOLDER_PATH = Paths.get("M://", "Conjecture Program");
         public static final Path CONJECTURE_OUTPUT_FILE = Paths.get(CONJECTURE_FOLDER_PATH.toString(), "Conjecture Output.Dat");
-
+        public static final String POISON = "Initiate Queue Shutdown";
         private final ExecutorService executor;
         private final FileChannel channel;
         private final ByteBuffer buffer;
+        private final BlockingQueue<String> queue;
 
         /**
          * Constructs a new {@link HubStorageManager}, responsible for all IO
@@ -349,19 +356,50 @@ public final class ProcessingHub {
                 Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
                 throw new RuntimeException(ex);
             }
-            this.buffer = ByteBuffer.allocateDirect(1024);
+            this.queue = new ArrayBlockingQueue<>(100);
+            this.buffer = ByteBuffer.allocateDirect(1024 * 32);
             this.channel = FileChannel.open(CONJECTURE_OUTPUT_FILE, StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);
             this.executor = Executors.newSingleThreadExecutor((Runnable r) -> new Thread(r, "Processing Hub Storage Manager Thread"));
+            this.executor.submit(() -> {
+                String message = "";
+                while (true) {
+                    try {
+                        String string = this.queue.take() + "\n\n";
+                        if (string.equalsIgnoreCase(HubStorageManager.POISON + "\n\n")) {
+                            writeString(message);
+                            break;
+                        } else if (message.length() >= 1000) {
+                            writeString(message);
+                            message = string;
+                        } else {
+                            message += string;
+                        }
+                    } catch (IOException ex) {
+                        Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
+                        break;
+                    } catch (InterruptedException ex) {
+                        Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
+                        break;
+                    }
+                }
+            });
+        }
+
+        private void writeString(String message) throws IOException {
+            this.buffer.put(message.getBytes(Charset.forName("UTF-16")));
+            this.buffer.flip();
+            this.channel.write(this.buffer);
+            this.buffer.clear();
         }
 
         /**
          * Shuts down this processing hub.
          */
-        public void shutdown() throws IOException {
+        public void shutdown() throws IOException, InterruptedException {
+            this.queue.put(POISON);
             this.executor.shutdown();
-            while (!this.executor.isTerminated()) {
-            }
+            this.executor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
             this.channel.close();
         }
 
@@ -371,17 +409,8 @@ public final class ProcessingHub {
          * @param value The value to save
          * @throws InterruptedException If interrupted while waiting
          */
-        public void saveValue(CollatzSequencer.FinalSequencerReport<? extends Number> value) throws IOException {
-            this.executor.submit(() -> {
-                try {
-                    this.buffer.put((value.toString() + "\n").getBytes(Charset.forName("UTF-16")));
-                    this.buffer.flip();
-                    this.channel.write(this.buffer);
-                    this.buffer.clear();
-                } catch (IOException ex) {
-                    Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
-                }
-            });
+        public void saveValue(CollatzSequencer.FinalSequencerReport<? extends Number> value) throws IOException, InterruptedException {
+            this.queue.put(value.toString());
         }
 
         /**
