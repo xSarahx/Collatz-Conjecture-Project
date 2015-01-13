@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -33,6 +34,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -47,24 +51,28 @@ import net.jcip.annotations.NotThreadSafe;
 public final class ProcessingHub {
 
     private static final int AVAILABLE_PROCESSORS = Runtime.getRuntime().availableProcessors();
-    private static final List<Future<CollatzSequencer.FinalSequencerReport<? extends Number>>> dataSet
-            = new ArrayList<>(toIntExact(HubNumericalHelper.DEFAULT_INCREMENT_VALUE.intValueExact()));
     private static final Logger LOG = Logger.getLogger(ProcessingHub.class.getName());
 
-    private final ExecutorService service;
+    private final ExecutorService service = Executors.newFixedThreadPool(AVAILABLE_PROCESSORS + 1, new ThreadFactory() {
+        private BigInteger count = BigInteger.ZERO;
+
+        @Override
+        public Thread newThread(Runnable r) {
+            count = count.add(BigInteger.ONE);
+            return new Thread(r, "Collatz Sequencer Thread: " + count);
+        }
+    });
+    private final HubControlState controlState;
     private final HubStorageManager storageManager;
 
-    public ProcessingHub() {
-        this.storageManager = new HubStorageManager(this);
-        this.service = Executors.newFixedThreadPool(AVAILABLE_PROCESSORS + 1, new ThreadFactory() {
-            private BigInteger count = BigInteger.ZERO;
+    public ProcessingHub() throws IOException {
+        this.controlState = new WriteUntilDiskFullState(this);
+        this.storageManager = new HubStorageManager();
+    }
 
-            @Override
-            public Thread newThread(Runnable r) {
-                count = count.add(BigInteger.ONE);
-                return new Thread(r, "Collatz Sequencer Thread: " + count);
-            }
-        });
+    public ProcessingHub(BigInteger startingNumber, BigInteger endingNumber) throws IOException {
+        this.controlState = new NumberRangeState(startingNumber, endingNumber);
+        this.storageManager = new HubStorageManager();
     }
 
     private void createTask(@NotNull BigInteger startNumber, @NotNull BigInteger finishNumber) {
@@ -77,37 +85,30 @@ public final class ProcessingHub {
             BigInteger copy = i;
             this.service.submit(() -> {
                 CollatzSequencer.FinalSequencerReport<? extends Number> result = new CollatzSequencer(copy, true).init();
-                storageManager.saveValue(result);
+                this.storageManager.saveValue(result);
                 return result;
             });
         }
     }
 
-    public void shutdownHub() {
+    public void shutdownHub() throws IOException {
         this.service.shutdown();
+        try {
+            this.service.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
+        }
         this.storageManager.shutdown();
     }
 
     /**
-     * Initiates the {@code ProcessingHub} in the write until the disk is full
-     * mode.
-     */
-    public void hubInit() {
-        WriteUntilDiskFullState state = new WriteUntilDiskFullState();
-        state.onHubInit(this);
-        shutdownHub();
-    }
-
-    /**
-     * Initiates the {@code ProcessingHub} in a range of numbers that you
-     * specify.
+     * Initiates the {@code ProcessingHub} in whatever mode the
+     * {@link ProcessingHub} is configured in.
      *
-     * @param startingNumber The number to start at
-     * @param endingNumber The number to end at
+     * @throws java.io.IOException If there was an error with creating the file
      */
-    public void hubInitNumberRange(BigInteger startingNumber, BigInteger endingNumber) {
-        NumberRangeState state = new NumberRangeState(startingNumber, endingNumber);
-        state.onHubInit(this);
+    public void hubInit() throws IOException {
+        this.controlState.onHubInit();
         shutdownHub();
     }
 
@@ -318,55 +319,58 @@ public final class ProcessingHub {
 
         public static final Path CONJECTURE_FOLDER_PATH = Paths.get("M://", "Conjecture Program");
         public static final Path CONJECTURE_OUTPUT_FILE = Paths.get(CONJECTURE_FOLDER_PATH.toString(), "Conjecture Output.Dat");
-        private final BlockingQueue<CollatzSequencer.FinalSequencerReport<? extends Number>> queue;
 
         private final ExecutorService executor;
-        private final ProcessingHub hub;
-        private volatile boolean shutdown;
-//TODO: Add a counter for the number range
+        private final FileChannel channel;
+        private final ByteBuffer buffer;
 
-        public HubStorageManager(ProcessingHub hub) {
+        public HubStorageManager() throws IOException {
             try {
                 Files.createDirectories(CONJECTURE_FOLDER_PATH);
             } catch (IOException ex) {
                 Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
                 throw new RuntimeException(ex);
             }
-            this.queue = new ArrayBlockingQueue<>(1);
-            this.hub = hub;
+            this.buffer = ByteBuffer.allocateDirect(1024);
+            this.channel = FileChannel.open(CONJECTURE_OUTPUT_FILE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
             this.executor = Executors.newSingleThreadExecutor((Runnable r) -> new Thread(r, "Processing Hub Storage Manager Thread"));
+        }
+
+        /**
+         * Shuts down this processing hub.
+         */
+        public void shutdown() throws IOException {
+            this.executor.shutdown();
+            while (!this.executor.isTerminated()) {
+            }
+            this.channel.close();
+        }
+
+        /**
+         * Saves the current value to the disk.
+         *
+         * @param value The value to save
+         * @throws InterruptedException If interrupted while waiting
+         */
+        public void saveValue(CollatzSequencer.FinalSequencerReport<? extends Number> value) throws IOException {
             this.executor.submit(() -> {
-                try (FileChannel channel = FileChannel.open(CONJECTURE_OUTPUT_FILE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
-                    ByteBuffer buffer = ByteBuffer.allocateDirect(1024);
-                    while (!this.shutdown || this.queue.size() != 0) {
-                        CollatzSequencer.FinalSequencerReport<? extends Number> value;
-                        try {
-                            value = HubStorageManager.this.queue.take();
-                            buffer.put((value.toString() + "\n").getBytes(Charset.forName("UTF-16")));
-                            buffer.flip();
-                            channel.write(buffer);
-                            buffer.clear();
-                        } catch (InterruptedException ex) {
-                            Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
-                        }
-                    }
+                try {
+                    this.buffer.put((value.toString() + "\n").getBytes(Charset.forName("UTF-16")));
+                    this.buffer.flip();
+                    this.channel.write(this.buffer);
+                    this.buffer.clear();
                 } catch (IOException ex) {
-                    Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
-                    this.hub.shutdownHub();
+                    Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
                 }
             });
         }
 
-        private void shutdown() {
-            this.shutdown = true;
-            this.executor.shutdown();
-        }
-
-        public void saveValue(CollatzSequencer.FinalSequencerReport<? extends Number> values) throws InterruptedException {
-            this.queue.put(values);
-        }
-
+        /**
+         * A getter for the current size of the output file.
+         *
+         * @return THe file size in bytes
+         */
         public long fileSize() {
             try {
                 return Files.size(CONJECTURE_OUTPUT_FILE);
@@ -379,25 +383,22 @@ public final class ProcessingHub {
     }
 
     @NotThreadSafe
-    private static final class WriteUntilDiskFullState implements HubControlState {
+    private final class WriteUntilDiskFullState implements HubControlState {
 
-        private BigInteger startingNumber, targetNumber;
         private HubNumericalHelper numberTracker;
 
-        public WriteUntilDiskFullState() {
-            this.startingNumber = BigInteger.ONE;
-            this.targetNumber = new BigInteger("50000");
-            this.numberTracker = new HubNumericalHelper(startingNumber, targetNumber);
+        public WriteUntilDiskFullState(@NotNull ProcessingHub hub) throws IOException {
+            this.numberTracker = new HubNumericalHelper(BigInteger.ONE, new BigInteger("50000"));
         }
 
         @Override
-        public void onHubInit(ProcessingHub hub) {
-            for (long fileSize = hub.storageManager.fileSize(), maxSize = 5L * 1024 * 1024 * 1024; fileSize <= maxSize;
-                    fileSize = hub.storageManager.fileSize(), this.numberTracker
+        public void onHubInit() throws IOException {
+            for (long fileSize = storageManager.fileSize(), maxSize = 5L * 1024 * 1024 * 1024; fileSize <= maxSize;
+                    fileSize = storageManager.fileSize(), this.numberTracker
                     = new HubNumericalHelper(this.numberTracker.getEndingNumber(),
                             this.numberTracker.getStartingNumber().add(this.numberTracker.getEndingNumber()))) {
                 for (; !this.numberTracker.isFinished(); this.numberTracker.increment()) {
-                    hub.createTask(this.numberTracker.getCurrentNumber(), this.numberTracker.getNextEndPoint());
+                    createTask(this.numberTracker.getCurrentNumber(), this.numberTracker.getNextEndPoint());
                 }
             }
         }
@@ -407,7 +408,7 @@ public final class ProcessingHub {
      * A class representing the state for number ranges.
      */
     @NotThreadSafe
-    private static final class NumberRangeState implements HubControlState {
+    private final class NumberRangeState implements HubControlState {
 
         private final BigInteger startingNumber, targetNumber;
         private final HubNumericalHelper numberTracker;
@@ -419,7 +420,7 @@ public final class ProcessingHub {
          * @param startingNumber The starting number
          * @param targetNumber The ending number
          */
-        public NumberRangeState(@NotNull BigInteger startingNumber, @NotNull BigInteger targetNumber) {
+        public NumberRangeState(@NotNull BigInteger startingNumber, @NotNull BigInteger targetNumber) throws IOException {
             if (startingNumber.compareTo(targetNumber) > 0) {
                 throw new IllegalArgumentException("The starting number is larger than the ending number.");
             } else if (startingNumber.equals(targetNumber)) {
@@ -431,9 +432,9 @@ public final class ProcessingHub {
         }
 
         @Override
-        public void onHubInit(ProcessingHub hub) {
+        public void onHubInit() throws IOException {
             for (; !this.numberTracker.isFinished(); this.numberTracker.increment()) {
-                hub.createTask(this.numberTracker.getCurrentNumber(), this.numberTracker.getNextEndPoint());
+                createTask(this.numberTracker.getCurrentNumber(), this.numberTracker.getNextEndPoint());
             }
         }
 
@@ -448,6 +449,22 @@ public final class ProcessingHub {
         /**
          * Implementation specific method for control center initiation.
          */
-        public void onHubInit(ProcessingHub hub);
+        public void onHubInit() throws IOException;
+    }
+
+    private class ExecutorNotifyWrapper extends ThreadPoolExecutor {
+
+        public ExecutorNotifyWrapper(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
+                BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory) {
+            super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory);
+        }
+
+        @Override
+        public boolean isTerminated() {
+            synchronized (service) {
+                service.notifyAll();
+            }
+            return super.isTerminated();
+        }
     }
 }
