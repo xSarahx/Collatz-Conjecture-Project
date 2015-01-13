@@ -6,45 +6,32 @@
 package com.gmail.physicistsarah.collatzconjecture.core;
 
 import java.io.IOException;
-import static java.lang.Math.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.ByteBuffer;
-import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.validation.constraints.NotNull;
 import net.jcip.annotations.NotThreadSafe;
 
 /**
+ * A class that controls the environment in which the Collatz Algorithm is
+ * executed.
  *
  * @author Sarah Szabo <PhysicistSarah@Gmail.com>
  */
@@ -65,16 +52,37 @@ public final class ProcessingHub {
     private final HubControlState controlState;
     private final HubStorageManager storageManager;
 
-    public ProcessingHub() throws IOException {
-        this.controlState = new WriteUntilDiskFullState(this);
+    /**
+     * Constructs a new {@link ProcessingHub} with the specified maximum disk
+     * storage space.
+     *
+     * @param bytes The amount of storage space, in bytes
+     * @throws IOException If an IOException occurred
+     */
+    public ProcessingHub(long bytes) throws IOException {
+        this.controlState = new WriteUntilSize(bytes);
         this.storageManager = new HubStorageManager();
     }
 
+    /**
+     * Constructs a new {@link ProcessingHub} with the specified bounds.
+     *
+     * @param startingNumber The starting number
+     * @param endingNumber THe ending number
+     * @throws IOException If an IOExceptio occurred
+     */
     public ProcessingHub(BigInteger startingNumber, BigInteger endingNumber) throws IOException {
         this.controlState = new NumberRangeState(startingNumber, endingNumber);
         this.storageManager = new HubStorageManager();
     }
 
+    /**
+     * Creates and launches tasks for each number between the number range
+     * specified.
+     *
+     * @param startNumber The first number
+     * @param finishNumber The final number
+     */
     private void createTask(@NotNull BigInteger startNumber, @NotNull BigInteger finishNumber) {
         if (finishNumber.subtract(startNumber).compareTo(BigInteger.ZERO) < 0) {
             throw new IllegalArgumentException("The starting number is larger than the final number.");
@@ -91,6 +99,12 @@ public final class ProcessingHub {
         }
     }
 
+    /**
+     * Shuts down the {@link ProcessingHub} and waits for the termination of the
+     * executor.
+     *
+     * @throws IOException
+     */
     public void shutdownHub() throws IOException {
         this.service.shutdown();
         try {
@@ -324,6 +338,12 @@ public final class ProcessingHub {
         private final FileChannel channel;
         private final ByteBuffer buffer;
 
+        /**
+         * Constructs a new {@link HubStorageManager}, responsible for all IO
+         * operations in the {@link ProcessingHub}.
+         *
+         * @throws IOException If an IOException occurred
+         */
         public HubStorageManager() throws IOException {
             try {
                 Files.createDirectories(CONJECTURE_FOLDER_PATH);
@@ -382,18 +402,31 @@ public final class ProcessingHub {
 
     }
 
+    /**
+     * A state class representing the state that will write to the disk until a
+     * certain amount of bytes has been written.
+     */
     @NotThreadSafe
-    private final class WriteUntilDiskFullState implements HubControlState {
+    private final class WriteUntilSize implements HubControlState {
 
         private HubNumericalHelper numberTracker;
+        private final long MAX_SIZE;
 
-        public WriteUntilDiskFullState(@NotNull ProcessingHub hub) throws IOException {
+        /**
+         * Constructs a new {@link WriteUntilSize} with the specified amount of
+         * bytes.
+         *
+         * @param bytes The amount of bytes; max
+         * @throws IOException If an IOException occurred
+         */
+        public WriteUntilSize(long bytes) throws IOException {
             this.numberTracker = new HubNumericalHelper(BigInteger.ONE, new BigInteger("50000"));
+            this.MAX_SIZE = bytes;
         }
 
         @Override
         public void onHubInit() throws IOException {
-            for (long fileSize = storageManager.fileSize(), maxSize = 5L * 1024 * 1024 * 1024; fileSize <= maxSize;
+            for (long fileSize = storageManager.fileSize(); fileSize <= this.MAX_SIZE;
                     fileSize = storageManager.fileSize(), this.numberTracker
                     = new HubNumericalHelper(this.numberTracker.getEndingNumber(),
                             this.numberTracker.getStartingNumber().add(this.numberTracker.getEndingNumber()))) {
@@ -450,21 +483,5 @@ public final class ProcessingHub {
          * Implementation specific method for control center initiation.
          */
         public void onHubInit() throws IOException;
-    }
-
-    private class ExecutorNotifyWrapper extends ThreadPoolExecutor {
-
-        public ExecutorNotifyWrapper(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-                BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory) {
-            super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory);
-        }
-
-        @Override
-        public boolean isTerminated() {
-            synchronized (service) {
-                service.notifyAll();
-            }
-            return super.isTerminated();
-        }
     }
 }
