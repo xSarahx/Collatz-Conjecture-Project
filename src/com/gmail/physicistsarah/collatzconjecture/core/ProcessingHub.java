@@ -5,6 +5,7 @@
  */
 package com.gmail.physicistsarah.collatzconjecture.core;
 
+import static java.nio.file.StandardOpenOption.*;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -340,8 +341,8 @@ public final class ProcessingHub {
         public static final String POISON = "Initiate Queue Shutdown";
         private final ExecutorService executor;
         private final FileChannel channel;
-        private final ByteBuffer buffer;
         private final BlockingQueue<String> queue;
+        private ByteBuffer buffer;
 
         /**
          * Constructs a new {@link HubStorageManager}, responsible for all IO
@@ -356,29 +357,33 @@ public final class ProcessingHub {
                 Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
                 throw new RuntimeException(ex);
             }
-            this.queue = new ArrayBlockingQueue<>(100);
-            this.buffer = ByteBuffer.allocateDirect(1024 * 32);
+            this.queue = new ArrayBlockingQueue<>(1000);
             this.channel = FileChannel.open(CONJECTURE_OUTPUT_FILE, StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-            this.executor = Executors.newSingleThreadExecutor((Runnable r) -> new Thread(r, "Processing Hub Storage Manager Thread"));
+            this.executor = Executors.newSingleThreadExecutor((Runnable r) -> {
+                Thread thread = new Thread(r, "Processing Hub Storage Manager Thread");
+                thread.setUncaughtExceptionHandler((Thread t, Throwable e) -> {
+                    Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, e);
+                });
+                return thread;
+            });
             this.executor.submit(() -> {
                 String message = "";
-                while (true) {
+                for (int counter = 0;; counter++) {
                     try {
                         String string = this.queue.take() + "\n\n";
                         if (string.equalsIgnoreCase(HubStorageManager.POISON + "\n\n")) {
                             writeString(message);
+                            internalShutdown();
                             break;
-                        } else if (message.length() >= 1000) {
+                        } else if (counter >= 10) {
                             writeString(message);
-                            message = string;
+                            message = "";
+                            counter = 0;
                         } else {
                             message += string;
                         }
-                    } catch (IOException ex) {
-                        Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
-                        break;
-                    } catch (InterruptedException ex) {
+                    } catch (IOException | InterruptedException ex) {
                         Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
                         break;
                     }
@@ -387,20 +392,26 @@ public final class ProcessingHub {
         }
 
         private void writeString(String message) throws IOException {
-            this.buffer.put(message.getBytes(Charset.forName("UTF-16")));
-            this.buffer.flip();
+            this.buffer = ByteBuffer.wrap(message.getBytes(Charset.forName("UTF-16")));
             this.channel.write(this.buffer);
             this.buffer.clear();
         }
 
         /**
+         * Cleans up and closes the channel
+         *
+         * @throws IOException If an IOException was thrown
+         */
+        private void internalShutdown() throws IOException {
+            this.executor.shutdown();
+            this.channel.close();
+        }
+
+        /**
          * Shuts down this processing hub.
          */
-        public void shutdown() throws IOException, InterruptedException {
+        public void shutdown() throws InterruptedException {
             this.queue.put(POISON);
-            this.executor.shutdown();
-            this.executor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
-            this.channel.close();
         }
 
         /**
