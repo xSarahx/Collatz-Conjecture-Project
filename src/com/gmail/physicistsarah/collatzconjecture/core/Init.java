@@ -38,7 +38,8 @@ public class Init {
 
     private static void initProcessingHub() {
         try {
-            ProcessingHub hub = new ProcessingHub(BigInteger.ONE, new BigInteger("400000"));
+            //ProcessingHub hub = new ProcessingHub(BigInteger.ONE, new BigInteger("600000"));
+            ProcessingHub hub = new ProcessingHub(50L * 1024 * 1024);
             hub.hubInit();
             //initNumberChooser();
         } catch (IOException ex) {

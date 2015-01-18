@@ -5,6 +5,7 @@
  */
 package com.gmail.physicistsarah.collatzconjecture.core;
 
+import java.io.BufferedOutputStream;
 import static java.nio.file.StandardOpenOption.*;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -55,12 +56,18 @@ public final class ProcessingHub {
 
     /**
      * Constructs a new {@link ProcessingHub} with the specified maximum disk
-     * storage space.
+     * storage space. NOTE: Will be slower than the number range mode due to the
+     * need to be certain as to the size of the file on the disk.If the file
+     * size is lower than one {@link BigInteger} at least one {@link BigInteger}
+     * will be written.
      *
      * @param bytes The amount of storage space, in bytes
      * @throws IOException If an IOException occurred
      */
     public ProcessingHub(long bytes) throws IOException {
+        if (bytes <= 0) {
+            throw new IllegalArgumentException("The number of bytes is less than or equal to zero");
+        }
         this.controlState = new WriteUntilSize(bytes);
         this.storageManager = new HubStorageManager();
     }
@@ -72,7 +79,12 @@ public final class ProcessingHub {
      * @param endingNumber THe ending number
      * @throws IOException If an IOExceptio occurred
      */
-    public ProcessingHub(BigInteger startingNumber, BigInteger endingNumber) throws IOException {
+    public ProcessingHub(@NotNull BigInteger startingNumber, @NotNull BigInteger endingNumber) throws IOException {
+        if (startingNumber.compareTo(endingNumber) > 0) {
+            throw new IllegalArgumentException("Starting number is larger than ending number");
+        } else if (startingNumber.equals(endingNumber)) {
+            throw new IllegalArgumentException("Starting number is equal to ending number");
+        }
         this.controlState = new NumberRangeState(startingNumber, endingNumber);
         this.storageManager = new HubStorageManager();
     }
@@ -137,6 +149,10 @@ public final class ProcessingHub {
     @NotThreadSafe
     private static final class HubNumericalHelper implements Iterable<BigInteger> {
 
+        /**
+         * The value incremented when {@link HubNumericalHelper#increment()} is
+         * called. Currently this value is 10,000.
+         */
         public static final BigInteger DEFAULT_INCREMENT_VALUE = new BigInteger("10000");
 
         /**
@@ -340,9 +356,8 @@ public final class ProcessingHub {
         public static final Path CONJECTURE_OUTPUT_FILE = Paths.get(CONJECTURE_FOLDER_PATH.toString(), "Conjecture Output.Dat");
         public static final String POISON = "Initiate Queue Shutdown";
         private final ExecutorService executor;
-        private final FileChannel channel;
+        private final BufferedOutputStream stream;
         private final BlockingQueue<String> queue;
-        private ByteBuffer buffer;
 
         /**
          * Constructs a new {@link HubStorageManager}, responsible for all IO
@@ -357,44 +372,28 @@ public final class ProcessingHub {
                 Logger.getLogger(Init.class.getName()).log(Level.SEVERE, null, ex);
                 throw new RuntimeException(ex);
             }
-            this.queue = new ArrayBlockingQueue<>(1000);
-            this.channel = FileChannel.open(CONJECTURE_OUTPUT_FILE, StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-            this.executor = Executors.newSingleThreadExecutor((Runnable r) -> {
-                Thread thread = new Thread(r, "Processing Hub Storage Manager Thread");
-                thread.setUncaughtExceptionHandler((Thread t, Throwable e) -> {
-                    Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, e);
-                });
-                return thread;
-            });
+            this.queue = new ArrayBlockingQueue<>(10);
+            this.stream = new BufferedOutputStream(Files.newOutputStream(CONJECTURE_OUTPUT_FILE, TRUNCATE_EXISTING, CREATE, WRITE));
+            this.executor = Executors.newSingleThreadExecutor((Runnable r) -> new Thread(r, "Processing Hub Storage Manager Thread"));
             this.executor.submit(() -> {
-                String message = "";
-                for (int counter = 0;; counter++) {
+                while (true) {
                     try {
                         String string = this.queue.take() + "\n\n";
-                        if (string.equalsIgnoreCase(HubStorageManager.POISON + "\n\n")) {
-                            writeString(message);
+                        if (!string.equalsIgnoreCase(POISON + "\n\n")) {
+                            writeString(string);
+                        } else {
                             internalShutdown();
                             break;
-                        } else if (counter >= 10) {
-                            writeString(message);
-                            message = "";
-                            counter = 0;
-                        } else {
-                            message += string;
                         }
-                    } catch (IOException | InterruptedException ex) {
+                    } catch (InterruptedException | IOException ex) {
                         Logger.getLogger(ProcessingHub.class.getName()).log(Level.SEVERE, null, ex);
-                        break;
                     }
                 }
             });
         }
 
         private void writeString(String message) throws IOException {
-            this.buffer = ByteBuffer.wrap(message.getBytes(Charset.forName("UTF-16")));
-            this.channel.write(this.buffer);
-            this.buffer.clear();
+            this.stream.write(message.getBytes(Charset.forName("UTF-16")));
         }
 
         /**
@@ -404,7 +403,7 @@ public final class ProcessingHub {
          */
         private void internalShutdown() throws IOException {
             this.executor.shutdown();
-            this.channel.close();
+            this.stream.close();
         }
 
         /**
@@ -441,13 +440,27 @@ public final class ProcessingHub {
     }
 
     /**
+     * The super interface of the state pattern for
+     * {@link HubControlCenter#hubInit(com.gmail.physicistsarah.collatzconjecture.core.ProcessingHub)}
+     */
+    private static interface HubControlState {
+
+        /**
+         * Implementation specific method for control center initiation.
+         */
+        public void onHubInit() throws IOException;
+    }
+
+    /**
      * A state class representing the state that will write to the disk until a
-     * certain amount of bytes has been written.
+     * certain amount of bytes has been written. NOTE: Will be slower than the
+     * number range mode due to the need to be certain as to the size of the
+     * file on the disk. If the file size is lower than one {@link BigInteger}
+     * at least one {@link BigInteger} will be written.
      */
     @NotThreadSafe
     private final class WriteUntilSize implements HubControlState {
 
-        private HubNumericalHelper numberTracker;
         private final long MAX_SIZE;
 
         /**
@@ -458,19 +471,15 @@ public final class ProcessingHub {
          * @throws IOException If an IOException occurred
          */
         public WriteUntilSize(long bytes) throws IOException {
-            this.numberTracker = new HubNumericalHelper(BigInteger.ONE, new BigInteger("50000"));
             this.MAX_SIZE = bytes;
         }
 
         @Override
         public void onHubInit() throws IOException {
+            BigInteger startingNumber = BigInteger.ONE, endingNumber = startingNumber.add(BigInteger.ONE);
             for (long fileSize = storageManager.fileSize(); fileSize <= this.MAX_SIZE;
-                    fileSize = storageManager.fileSize(), this.numberTracker
-                    = new HubNumericalHelper(this.numberTracker.getEndingNumber(),
-                            this.numberTracker.getStartingNumber().add(this.numberTracker.getEndingNumber()))) {
-                for (; !this.numberTracker.isFinished(); this.numberTracker.increment()) {
-                    createTask(this.numberTracker.getCurrentNumber(), this.numberTracker.getNextEndPoint());
-                }
+                    fileSize = storageManager.fileSize(), startingNumber = endingNumber, endingNumber = endingNumber.add(BigInteger.ONE)) {
+                createTask(startingNumber, endingNumber);
             }
         }
     }
@@ -511,15 +520,4 @@ public final class ProcessingHub {
 
     }
 
-    /**
-     * The super interface of the state pattern for
-     * {@link HubControlCenter#hubInit(com.gmail.physicistsarah.collatzconjecture.core.ProcessingHub)}
-     */
-    private static interface HubControlState {
-
-        /**
-         * Implementation specific method for control center initiation.
-         */
-        public void onHubInit() throws IOException;
-    }
 }
